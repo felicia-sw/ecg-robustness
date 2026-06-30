@@ -1,0 +1,26 @@
+# Core
+numpy
+scipy
+pandas
+scikit-learn
+
+# Time-series classification
+aeon            # MiniRocket, InceptionTime, catch22 wrappers
+sktime
+pycatch22       # catch22 features
+
+# ECG / signals
+wfdb            # read PhysioNet records (PTB-XL, NSTDB)
+neurokit2       # ECG processing / synthetic noise utilities
+
+# Deep models
+torch
+tsai            # deep TSC (InceptionTime / ResNet variants)
+
+# Stats & plotting
+statsmodels     # Friedman / post-hoc tests
+matplotlib
+
+# Notes:
+# - Mantis (foundation model) is installed separately — see its arXiv/repo.
+# - Pin versions once the environment is stable.

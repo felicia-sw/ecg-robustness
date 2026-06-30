@@ -1,0 +1,38 @@
+# --- Data (download separately; see README) ---
+data/*
+!data/.gitkeep
+
+# --- Results / generated artifacts ---
+results/*
+!results/.gitkeep
+
+# --- Models / caches ---
+*.pt
+*.pth
+*.pkl
+*.joblib
+*.npy
+*.npz
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.ipynb_checkpoints/
+
+# --- Virtual envs ---
+.venv/
+venv/
+env/
+.python-version
+
+# --- Tooling / OS ---
+.vscode/
+.idea/
+.DS_Store
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
