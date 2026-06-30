@@ -1,6 +1,7 @@
 # --- Data (download separately; see README) ---
 data/*
 !data/.gitkeep
+!data/README.md
 
 # --- Results / generated artifacts ---
 results/*
