@@ -112,7 +112,7 @@ Error, with `error = 1 − macro-AUROC`, normalized to a fixed reference model (
 relative mCE (degradation above each model's own clean error). Clean macro-AUROC is
 always reported alongside. (Reference = MiniRocket is a choice; unlike ImageNet-C's weak
 AlexNet baseline it is the top model here, so all mCE > 1 by construction — a caveat, not a
-bias in the *ranking*, which is reference-invariant.)
+bias in the *ranking*, which we verified is identical under all four possible reference choices.)
 
 ### 3.5 Statistical analysis
 The pre-registered RQ1 test is the Spearman ρ between the clean-accuracy ranking and the
