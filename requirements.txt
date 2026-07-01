@@ -20,6 +20,10 @@ tsai            # deep TSC (InceptionTime / ResNet variants)
 # Stats & plotting
 statsmodels     # Friedman / post-hoc tests
 matplotlib
+tabulate        # markdown tables in results/summary.md
+
+# Dev / tests
+pytest
 
 # Notes:
 # - Mantis (foundation model) is installed separately — see its arXiv/repo.
