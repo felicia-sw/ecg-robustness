@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ecg-c"
+version = "0.1.0"
+description = "ECG-C: a physically-grounded common-corruption robustness audit for ECG classification"
+requires-python = ">=3.10"
+
+[tool.setuptools]
+packages = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
