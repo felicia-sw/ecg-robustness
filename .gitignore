@@ -37,3 +37,11 @@ env/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# --- Internal / private docs (not for public) ---
+CLAUDE.md
+REPORT-PLAN.md
+docs/ts-research-ideas.md
+docs/ECG-C-report-review.md
+docs/google-doc-edits.md
+docs/archive/
