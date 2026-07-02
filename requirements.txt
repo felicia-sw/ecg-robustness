@@ -1,30 +1,41 @@
-# Core
+# ECG-C dependencies.
+#
+# This file lists direct dependencies. EXACT versions are locked in
+# `requirements.lock.txt`, which you MUST generate on the machine that produced
+# `results/` (see `make freeze`). Reproducing the reported numbers requires those
+# exact versions -- in particular the gain-miscalibration result depends on aeon's
+# `Rocket(normalise=True)` default, whose behaviour has varied across aeon releases,
+# so the aeon version is load-bearing and must be recorded.
+#
+# Install:  make setup      (editable install + these deps)
+# Lock:     make freeze     (writes requirements.lock.txt from the current env)
+# Reproduce exactly:  pip install -r requirements.lock.txt
+
+# Core numerics
 numpy
 scipy
 pandas
 scikit-learn
 
-# Time-series classification
-aeon            # MiniRocket, InceptionTime, catch22 wrappers
+# Time-series classification (the model zoo)
+aeon            # MiniRocket, Rocket, Hydra, catch22 wrappers  (version is load-bearing; see header)
 sktime
 pycatch22       # catch22 features
 
 # ECG / signals
 wfdb            # read PhysioNet records (PTB-XL, NSTDB)
-neurokit2       # ECG processing / synthetic noise utilities
+neurokit2       # ECG processing utilities
 
-# Deep models
+# Deep models (future work; not needed for the four-model CPU report)
 torch
-tsai            # deep TSC (InceptionTime / ResNet variants)
+tsai            # InceptionTime / ResNet variants
 
 # Stats & plotting
-statsmodels     # Friedman / post-hoc tests
+statsmodels     # Friedman / Holm post-hoc
 matplotlib
 tabulate        # markdown tables in results/summary.md
 
 # Dev / tests
 pytest
 
-# Notes:
-# - Mantis (foundation model) is installed separately — see its arXiv/repo.
-# - Pin versions once the environment is stable.
+# Note: Mantis (foundation model) is installed separately -- see its repo.
