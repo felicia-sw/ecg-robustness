@@ -115,6 +115,69 @@ def significance(grid: pd.DataFrame, models: list):
     return (float(fstat), float(fp)), wh
 
 
+def significance_family_blocked(grid: pd.DataFrame, models: list):
+    """Friedman over CORRUPTION FAMILIES (severities averaged) -> near-independent blocks.
+
+    The default ``significance`` test treats all 25 (corruption x severity) cells as
+    independent blocks, but the five severities within a family are strongly dependent
+    (a monotone ladder on the same records), which inflates the effective sample size
+    and the significance. Averaging each family to a single block (5 near-independent
+    blocks) is the conservative complement; report both. Returns ((stat, p), n_blocks).
+    """
+    corr = grid[grid.corruption != "clean"]
+    fam = (corr.groupby(["model", "corruption"]).macro_auroc.mean().unstack("corruption")).loc[models]
+    fstat, fp = friedmanchisquare(*[fam.loc[m].values for m in models])
+    return (float(fstat), float(fp)), int(fam.shape[1])
+
+
+def mce_reference_sensitivity(grid: pd.DataFrame, models: list | None = None):
+    """mCE under EVERY possible reference model, and whether the induced ranking is invariant.
+
+    mCE(f) = mean_c error_sum(f,c)/error_sum(ref,c) is a *reweighted* mean whose weights
+    1/error_sum(ref,c) change with the reference, so ranking-invariance is NOT structural --
+    it is an empirical property to be checked, not assumed. Returns
+    (DataFrame[ref x model] of mCE, {ref: ranked-model tuple}, invariant: bool).
+    """
+    es = error_sums(grid)
+    refs = list(es.index) if models is None else [m for m in models if m in es.index]
+    table = {ref: es.divide(es.loc[ref], axis=1).mean(axis=1) for ref in refs}
+    df = pd.DataFrame(table).T
+    if models is not None:
+        df = df[models]
+    rankings = {ref: tuple(df.loc[ref].sort_values().index) for ref in refs}
+    invariant = len(set(rankings.values())) == 1
+    return df, rankings, invariant
+
+
+# ------------------------------------------------------------- multi-seed stability
+def multiseed_leaderboard(multi_grid: pd.DataFrame, reference_model: str = "minirocket"):
+    """Aggregate a multi-seed grid (``grid_multiseed.csv`` with a ``seed`` column).
+
+    Addresses the single-seed limitation: with random-kernel models (Rocket/Hydra) the
+    ranking can move with the training seed, so a ranking claim must be shown stable.
+    Returns (per-model DataFrame with clean/mCE mean+sd across seeds, and the mCE
+    rank each model most often holds; and a dict {mCE-ranking-tuple: n_seeds} showing
+    how often each full ordering occurs -- e.g. whether the Rocket<->Hydra swap is stable).
+    """
+    rows, ranking_counts = [], {}
+    for seed, g in multi_grid.groupby("seed"):
+        clean = clean_leaderboard(g)
+        mce = mean_corruption_error(g, reference_model)
+        order = tuple(mce.sort_values().index)                 # best (lowest mCE) first
+        ranking_counts[order] = ranking_counts.get(order, 0) + 1
+        rank_pos = {m: i + 1 for i, m in enumerate(order)}
+        for m in mce.index:
+            rows.append(dict(seed=seed, model=m, clean=clean[m],
+                             mce=float(mce[m]), mce_rank=rank_pos[m]))
+    df = pd.DataFrame(rows)
+    agg = df.groupby("model").agg(
+        clean_mean=("clean", "mean"), clean_sd=("clean", "std"),
+        mCE_mean=("mce", "mean"), mCE_sd=("mce", "std"),
+        mCE_rank_median=("mce_rank", "median"),
+    ).sort_values("mCE_mean")
+    return agg, ranking_counts
+
+
 # ------------------------------------------------------------- figures + report
 def make_figures(grid: pd.DataFrame, models: list, corrs: list, reference_model: str):
     import matplotlib
@@ -155,7 +218,7 @@ def make_figures(grid: pd.DataFrame, models: list, corrs: list, reference_model:
         return f"CD diagram skipped: {e}"
 
 
-def main(reference_model: str = "minirocket"):
+def main(reference_model: str = "minirocket", n_boot: int = 1000):
     grid = pd.read_csv(f"{RESULTS_DIR}/grid.csv")
     models = [m for m in MODEL_ORDER if m in set(grid.model)]
     corrs = list(grid[grid.corruption != "clean"].corruption.unique())
@@ -166,26 +229,50 @@ def main(reference_model: str = "minirocket"):
     lb = pd.DataFrame({"clean_auroc": pd.Series(clean), "mCE": mce, "relative_mCE": rce}).loc[models]
     lb.sort_values("mCE").to_csv(f"{RESULTS_DIR}/leaderboard.csv")
 
-    rho, p = rho_clean_vs_robustness(clean, mce.to_dict(), models)
-    lo, hi, _ = bootstrap_rho(f"{RESULTS_DIR}/preds", models, corrs, reference_model)
+    from src.stats import spearman_exact
+
+    rho, p_approx = rho_clean_vs_robustness(clean, mce.to_dict(), models)
+    exact = spearman_exact([clean[m] for m in models], [-mce[m] for m in models])
+    lo, hi, rhos = bootstrap_rho(f"{RESULTS_DIR}/preds", models, corrs, reference_model, n_boot=n_boot)
+    boot_vals = [float(v) for v in sorted(set(np.round(rhos, 3)))]
     (fstat, fp), wh = significance(grid, models)
+    (fstat_fam, fp_fam), n_blocks = significance_family_blocked(grid, models)
+    _, _, ref_invariant = mce_reference_sensitivity(grid, models)
+    n_refs = grid.model.nunique()
     cd = make_figures(grid, models, corrs, reference_model)
 
-    verdict = "SUPPORTED" if (rho < 0.7 and hi < 0.9) else ("weakly supported" if rho < 0.7 else "NOT supported")
+    reachable_below_07 = [r for r in exact["achievable_rho"] if r < 0.7 and r >= rho - 1e-9]
+    rule_met = (rho < 0.7) and (hi < 0.9)
+    verdict = "SUPPORTED" if rule_met else "NOT met (pre-registered weak-proxy rule)"
     lines = [
         "# ECG-C — Results summary\n",
         f"Zoo: {', '.join(models)} | reference (mCE): {reference_model}\n",
         "## Leaderboard (sorted by mCE)\n", lb.sort_values("mCE").round(4).to_markdown(),
-        f"\n## RQ1 — clean accuracy vs robustness",
-        f"- Spearman rho (clean vs -mCE) = **{rho:.3f}** (p={p:.3f})",
-        f"- Record-bootstrap 95% CI: [{lo:.3f}, {hi:.3f}]",
-        f"- Pre-registered rule (rho<0.7 & CI excludes 0.9): **{verdict}**  (n={len(models)} models — thin)\n",
-        f"## Significance across the {len(corrs)*len(SEVERITIES)} conditions",
-        f"- Friedman: stat={fstat:.2f}, p={fp:.2e}",
+        f"\n## RQ1 — clean accuracy vs robustness (n={len(models)} models — UNDERPOWERED)",
+        f"- Spearman rho (clean vs -mCE) = **{rho:.3f}**",
+        f"- EXACT permutation p: one-sided={exact['p_one_sided']:.3f}, two-sided={exact['p_two_sided']:.3f}"
+        f"  (scipy t-approx p={p_approx:.3f} is INVALID at this n and is not used)",
+        f"- Attainable rho at n={len(models)}: {exact['achievable_rho']}",
+        f"- Record-bootstrap: distinct rho values = {boot_vals}; 95% CI [{lo:.3f}, {hi:.3f}]"
+        f"  (resamples RECORDS with the {len(models)} models fixed; does NOT capture model-sampling uncertainty)",
+        f"- Pre-registered rule (rho<0.7 & CI excludes 0.9): **{verdict}**",
+    ]
+    if not reachable_below_07 and rho >= 0.8:
+        lines.append("  - NOTE: with the best and worst models rank-stable on both leaderboards, only "
+                     "rho in {0.8, 1.0} is attainable, so rho<0.7 was UNREACHABLE by construction — "
+                     "RQ1 is inconclusive, not evidence in either direction.")
+    lines += [
+        f"\n## Significance across the {len(corrs)*len(SEVERITIES)} conditions (blocks NOT independent)",
+        f"- Friedman (all {len(corrs)*len(SEVERITIES)} conditions): stat={fstat:.2f}, p={fp:.2e}",
+        f"- Friedman (family-blocked, {n_blocks} near-independent blocks): stat={fstat_fam:.2f}, p={fp_fam:.3f}"
+        f"  (conservative; severities within a family are dependent, so the 25-condition p is anti-conservative)",
     ]
     for w in wh:
         lines.append(f"  - {w['pair'][0]} vs {w['pair'][1]}: p_holm={w['p_holm']:.4f} "
                      f"({'significant' if w['reject'] else 'ns'})")
+    lines.append("\n## mCE reference-sensitivity")
+    lines.append(f"- mCE ranking identical across all {n_refs} reference choices: **{ref_invariant}** "
+                 "(verified empirically; not a structural property of the metric)")
     if rce.attrs.get("dropped_corruptions"):
         lines.append(f"\n_relative_mCE dropped (reference ~0 degradation): {rce.attrs['dropped_corruptions']}_")
     lines.append(f"\n## Figures\n- fig_fragility_heatmap.png\n- fig_severity_curves.png\n- fig_cd_diagram.png ({cd})\n")

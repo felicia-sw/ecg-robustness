@@ -1,257 +1,274 @@
 # Are ECG Classifiers Robust to Realistic Sensor Corruptions?
-### ECG-C: A physically-grounded common-corruption robustness audit on PTB-XL
+### ECG-C: a physically-grounded common-corruption robustness audit on PTB-XL
 
 *Focused report, July 2026. Companion to [ECG-C-proposal.md](ECG-C-proposal.md) and
-[pre-registration.md](pre-registration.md). Reproducibility: code in `src/`, results in `results/`.*
+[pre-registration.md](pre-registration.md). Code in `src/`, results in `results/`.*
 
 ---
 
 ## Abstract
 
-_ECG classification models are validated almost exclusively on clean recordings, yet are
-deployed on wearables where ordinary sensor corruptions dominate. We build ECG-C, a
-physically-grounded common-corruption suite for PTB-XL — five corruption families at five
-calibrated severities, anchored in real recorded MIT-BIH NSTDB noise — and audit a CPU
-model zoo (MiniRocket, Rocket, Hydra, catch22+ridge). We pre-register the test that clean
-diagnostic accuracy is a weak predictor of corruption robustness (clean-vs-mCE Spearman
-ρ < 0.7). The test is **inconclusive**: ρ = 0.80 (p = 0.20; record-bootstrap 95% CI
-[0.80, 1.00]) does not meet the rule, but with only four models it cannot confidently
-support or refute it. What we can say is that no strong re-ordering appeared — the best
-(MiniRocket) and worst (catch22) models are stable from clean to corrupted evaluation, and
-the single mid-rank swap (Rocket↔Hydra) is not statistically significant. Corruption-specific
-fragility is nonetheless real: Hydra, second on clean data, degrades most under Gaussian
-noise and muscle artifact (per-corruption CE 1.65× and 1.42× the reference), while the
-ROCKET family is invariant to gain miscalibration. Clean accuracy is a useful first filter
-but hides model-specific blind spots._
+ECG classification models are almost always validated on clean recordings, even though
+they increasingly run on wearables where sensor noise is the rule rather than the
+exception. We built ECG-C, a common-corruption suite for PTB-XL: five corruption families
+at five calibrated severities, with baseline wander and muscle artifact taken from real
+MIT-BIH NSTDB recordings. Using it we audited four CPU-trained classifiers (MiniRocket,
+Rocket, Hydra, and catch22 with a ridge probe) against one pre-registered question, namely
+whether clean diagnostic accuracy predicts robustness to corruption (clean-vs-mCE Spearman
+ρ below 0.7 would indicate that it does not). The data do not support that hypothesis. We
+measured ρ = 0.80, but with only four models the test is badly underpowered (p = 0.20), so
+it cannot confirm the alternative either. What we can say is that no large re-ordering
+occurred: the strongest model (MiniRocket) and the weakest (catch22) keep their positions
+from clean to corrupted data, and the single swap in the middle of the table is not
+statistically significant. Corruption-specific weaknesses are nonetheless easy to find.
+Hydra scores well on clean data but degrades sharply under Gaussian noise and muscle
+artifact, and the ROCKET models turn out to be insensitive to gain errors. Clean accuracy
+is a reasonable first screen, then, but it hides failure modes that appear only once the
+signal degrades.
 
 ## 1. Introduction
 
-ECG classifiers are moving from clean hospital archives onto Holter monitors, patches,
-and consumer wearables, where the real failure modes are not adversarial perturbations
-but *ordinary signal corruptions*: baseline wander, muscle (EMG) artifact, powerline
-interference, gain miscalibration, and low-bit quantization. Yet the ECG-classification
-literature evaluates almost exclusively on **clean** signals (PTB-XL, Chapman-Shaoxing,
-CPSC2018), leaving a basic deployment question unanswered: **does a model's clean
-diagnostic accuracy predict how well it holds up under realistic noise?**
+ECG classifiers trained on clean hospital archives are now being deployed on Holter
+monitors, chest patches, and consumer wearables, and in those settings the signal is rarely
+clean. The dominant failure modes there are not adversarial attacks but ordinary
+corruptions: baseline wander, muscle (EMG) artifact, powerline interference, gain
+miscalibration, low-bit quantization. Almost every ECG-classification benchmark, however,
+reports accuracy on clean signals (PTB-XL, Chapman-Shaoxing, CPSC2018), which leaves an
+obvious deployment question open: if a model scores well on clean recordings, does it hold
+up once the signal degrades?
 
-Borrowing the common-corruption protocol that ImageNet-C established for vision —
-evaluate at graded severities, report a normalized mean Corruption Error (mCE), and never
-train on the benchmark corruptions — we build **ECG-C** for PTB-XL and run a focused
-robustness audit. We test one sharp, pre-registered hypothesis: clean accuracy is a
-**weak** proxy for robustness, i.e., the model ranking re-orders under noise
-(clean-vs-mCE Spearman **ρ < 0.7**). This report is deliberately scoped (one dataset, a
-four-model CPU zoo, five corruptions) as a focused study rather than the full benchmark.
+Computer vision answered the analogous question with ImageNet-C, which evaluates models on
+common corruptions at graded severities, reports a normalized mean Corruption Error (mCE),
+and forbids training on the corruptions themselves. We port that protocol to ECG and build
+ECG-C on PTB-XL. The study tests a single pre-registered hypothesis: that clean accuracy is
+a weak predictor of robustness, in the sense that the model ranking reorders under noise
+(clean-vs-mCE Spearman ρ below 0.7). Scope is kept narrow on purpose — one dataset, four CPU
+models, five corruptions — so this is a focused study rather than a full benchmark.
 
 ## 2. Related work
 
-**Common-corruption robustness.** ImageNet-C [1] and ImageNet-C-bar [2] established the
-protocol and the mCE metric we transfer here; the design (graded severities, no training on
-the corruptions) is validated and reproducible. No analogue exists for ECG classification.
+ImageNet-C [1] and its follow-up ImageNet-C-bar [2] established the protocol and the mCE
+metric we borrow. The design (graded severities, no training on the corruptions) is by now
+well validated and reproducible, but there is no equivalent for ECG classification.
 
-**ECG denoising / noise detection.** A large literature removes baseline wander /
-powerline / motion artifact, and the MIT-BIH Noise Stress Test Database (NSTDB) [8] is the
-standard *source* of real recorded noise. These target signal *cleaning/quality*, not a
-standardized *classification-robustness* benchmark with a metric and a model-ranking audit.
+There is a large ECG signal-processing literature on removing baseline wander, powerline
+interference, and motion artifact, and the MIT-BIH Noise Stress Test Database [8] is the
+standard source of real recorded noise. That work is about cleaning signals and estimating
+quality, not about a standardized classification-robustness benchmark with a metric and a
+model-ranking audit. Adversarial-robustness and time-series OOD benchmarks are also
+adjacent but different: they study worst-case perturbations or cross-hospital and
+cross-device shift, rather than physically grounded signal corruptions at controlled
+severities.
 
-**Adversarial and OOD work.** Adversarial-robustness and time-series OOD/domain-shift
-benchmarks probe worst-case perturbations or cross-hospital/device shift — distinct from
-synthetic, physically-grounded *signal corruptions* at controlled severities.
-
-**Time-series classifiers.** The zoo we audit spans random convolutional kernels
-(ROCKET [3] / MiniRocket [4] / Hydra [5]) and interpretable summary features (catch22 [6]).
+The models we audit come from two families of time-series classifier: random convolutional
+kernels (ROCKET [3], MiniRocket [4], Hydra [5]) and interpretable summary features
+(catch22 [6]).
 
 ## 3. Method
 
 ### 3.1 Dataset
-PTB-XL [7] @ 100 Hz, 12-lead, 21,799 records, mapped to the 5 diagnostic **superclasses**
-(NORM, MI, STTC, CD, HYP) via `scp_statements.csv`. Labels are **multi-label**
-(class positives: NORM 9514, MI 5469, STTC 5235, CD 4898, HYP 2649; 411 records carry no
-diagnostic superclass). We use the published `strat_fold` split: folds 1–8 train
-(17,418), fold 9 validation (2,183), fold 10 test (2,198). Signals are channel-major
-`(n, 12, 1000)`.
+We use PTB-XL [7] at 100 Hz, 12-lead, 21,799 records, mapped to the five diagnostic
+superclasses (NORM, MI, STTC, CD, HYP) through `scp_statements.csv`. The labels are
+multi-label; class positives are NORM 9,514, MI 5,469, STTC 5,235, CD 4,898, and HYP 2,649,
+and 411 records carry no diagnostic superclass. We follow the published `strat_fold` split:
+folds 1–8 for training (17,418 records), fold 9 for validation (2,183), and fold 10 as the
+held-out test set (2,198). Signals are stored channel-major, as arrays of shape
+(n, 12, 1000).
 
-### 3.2 Model zoo (CPU)
-Four models over two paradigms, each a `transform → StandardScaler → ridge probe`:
-**MiniRocket** (10,000 kernels), **Rocket** (2,000 kernels), and **Hydra** (competing
-convolutional kernels) from the ROCKET family, and **catch22+ridge** (22 interpretable
-features per lead) as the feature-based paradigm. The probe is a multi-output `RidgeCV`
-(closed-form) on the 0/1 label matrix; because macro-AUROC is rank-based, ridge's
-continuous outputs are a valid per-class ranking signal, and ridge is both the standard
-ROCKET head and dramatically faster than an iterative logistic probe. Transforms are
-applied in row-batches to bound peak memory (needed for the torch-based Hydra).
-Transform parameters are fit on the **full training set**; empirically only MiniRocket
-learns data-dependent parameters (bias quantiles), while Rocket and Hydra use
-data-independent random kernels and catch22 is a stateless extractor. Deep models
-(InceptionTime, 1D SE-ResNet) and the Mantis foundation-feature probe are GPU-bound and
-left as future work; the small zoo is a stated limitation for the ρ estimate.
+### 3.2 Model zoo
+The report uses four CPU-trained models spanning two paradigms. Each is a pipeline of a
+time-series transform, a `StandardScaler`, and a ridge probe: MiniRocket with 10,000
+kernels, Rocket with 2,000 kernels, and Hydra from the ROCKET family, plus catch22 (22
+interpretable features per lead) as the feature-based approach. The probe is a multi-output
+`RidgeCV` fit on the 0/1 label matrix. We use ridge rather than a logistic head for two
+reasons: macro-AUROC is rank-based, so ridge's continuous outputs are a valid per-class
+score, and the closed-form solve is far faster than an iterative fit. Transforms are applied
+in row-batches to keep peak memory bounded, which matters for the torch-based Hydra. We fit
+the transform parameters on the full training set; in practice only MiniRocket learns
+anything data-dependent (its bias quantiles), since Rocket and Hydra use random kernels and
+catch22 is a fixed feature extractor.
+
+Deep models (InceptionTime, 1D SE-ResNet) and the Mantis foundation-feature probe need a
+GPU and are left for future work. The four-model zoo is the main constraint on the ρ
+estimate, and we return to it in Section 6.
 
 ### 3.3 The ECG-C corruption suite
-Five corruption families, each at five severities, applied to the **test set only**
-(models never see corrupted data). Severity is calibrated to a physical parameter so it
-is monotone and comparable across records.
+Five corruption families are applied to the test set only; the models never see corrupted
+data. Severity is tied to a physical parameter so that it increases monotonically and is
+comparable across records.
 
 | Corruption | Type | Severity ladder |
 |---|---|---|
-| Baseline wander (bw) | **real** NSTDB noise | SNR = {18, 12, 6, 0, −6} dB |
-| Muscle artifact (ma) | **real** NSTDB noise | SNR = {18, 12, 6, 0, −6} dB |
-| Gaussian | synthetic (white noise) | SNR = {18, 12, 6, 0, −6} dB |
+| Baseline wander (bw) | real NSTDB noise | SNR = {18, 12, 6, 0, −6} dB |
+| Muscle artifact (ma) | real NSTDB noise | SNR = {18, 12, 6, 0, −6} dB |
+| Gaussian | synthetic white noise | SNR = {18, 12, 6, 0, −6} dB |
 | Gain miscalibration | multiplicative | gain = {1.1, 1.25, 1.5, 2.0, 3.0} |
 | Quantization | reduced ADC bit-depth | bits = {10, 8, 6, 5, 4} |
 
-Real NSTDB records (360 Hz) are resampled to 100 Hz and added as independent per-lead
-random windows, scaled per (record, lead) to the target SNR
-(`scale = √(P_signal / (P_noise · 10^(SNR/10)))`). The calibration was verified: measured
-SNR matched every target to 0.00 dB. **Powerline interference is part of the ECG-C design
-but is excluded at 100 Hz:** 50 Hz mains lies at the Nyquist frequency (fs/2 = 50 Hz), so
-the tone cannot be represented without aliasing; it is deferred to the 500 Hz records (§6).
+The NSTDB records are sampled at 360 Hz. We resample them to 100 Hz, take independent random
+windows per lead, and scale each window per (record, lead) to hit the target SNR
+(`scale = √(P_signal / (P_noise · 10^(SNR/10)))`). We checked the calibration and the
+measured SNR matched every target to within 0.00 dB. Powerline interference belongs to the
+ECG-C design but we had to drop it at 100 Hz: 50 Hz mains sits at the Nyquist frequency
+(fs/2 = 50 Hz), so the tone cannot be represented without aliasing. We defer it to the 500 Hz
+records; Section 6 gives the detail.
 
 ### 3.4 Metrics
-Primary: macro-AUROC (one-vs-rest over the 5 superclasses). Robustness: mean Corruption
-Error, with `error = 1 − macro-AUROC`, normalized to a fixed reference model (MiniRocket):
-`CE(f,c) = Σ_s error(f,c,s) / Σ_s error(ref,c,s)`, `mCE(f) = mean_c CE(f,c)`. We also report
-relative mCE (degradation above each model's own clean error). Clean macro-AUROC is
-always reported alongside. (Reference = MiniRocket is a choice; unlike ImageNet-C's weak
-AlexNet baseline it is the top model here, so all mCE > 1 by construction — a caveat, not a
-bias in the *ranking*, which we verified is identical under all four possible reference choices.)
+The primary metric is macro-AUROC, one-vs-rest over the five superclasses. For robustness we
+use a mean Corruption Error, defined with `error = 1 − macro-AUROC` and normalized to a fixed
+reference model (MiniRocket): `CE(f,c) = Σ_s error(f,c,s) / Σ_s error(ref,c,s)` and
+`mCE(f) = mean_c CE(f,c)`. We also report a relative mCE that measures degradation above each
+model's own clean error, and we always show clean macro-AUROC alongside. Using MiniRocket as
+the reference is a choice; because it is the top model here (unlike ImageNet-C's weak AlexNet
+baseline), every other mCE comes out above 1. That affects the scale but not the ranking,
+which we checked is the same under all four possible reference models.
 
 ### 3.5 Statistical analysis
-The pre-registered RQ1 test is the Spearman ρ between the clean-accuracy ranking and the
-robustness ranking (−mCE), with a **record-level bootstrap** 95% CI (1,000 resamples of
-the test records). Across the 25 corruption×severity conditions we run a **Friedman** test,
-post-hoc **pairwise Wilcoxon signed-rank with Holm–Bonferroni** correction, and a
-**critical-difference diagram** over ranks.
+The pre-registered test for RQ1 is the Spearman correlation between the clean-accuracy
+ranking and the robustness ranking (−mCE), with a 95% confidence interval from a
+record-level bootstrap (1,000 resamples of the test records). Across the 25 (corruption ×
+severity) conditions we run a Friedman test, follow it with pairwise Wilcoxon signed-rank
+tests under Holm–Bonferroni correction, and summarize the model ranks with a
+critical-difference diagram.
 
 ### 3.6 Pre-registration
-The hypothesis, decision rule (ρ < 0.7 with bootstrap CI excluding 0.9), model list,
-corruption set, severity ladders, and metric were fixed **before** running the full grid
-(see [pre-registration.md](pre-registration.md)). Models are trained on clean data only,
-using published folds; no training on benchmark corruptions. **Deviation:** powerline was
-dropped post-hoc after we found it degenerate at 100 Hz (§3.3, §6); no result depends on it
-(ρ and the ranking are identical with or without it).
+We fixed the hypothesis, the decision rule (ρ < 0.7 with a bootstrap CI that excludes 0.9),
+the model list, the corruption set, the severity ladders, and the metric before running the
+full grid; see [pre-registration.md](pre-registration.md). Models are trained on clean data
+only, using the published folds, and never on the benchmark corruptions. One deviation:
+powerline was dropped after the fact once we found it degenerate at 100 Hz (Sections 3.3 and
+6). It changes nothing that matters — ρ and the ranking are identical with and without it.
 
 ## 4. Results
 
-**Table 1 — Leaderboard** (clean macro-AUROC; mCE and relative mCE normalized to MiniRocket;
-lower mCE = more robust). Evaluated on the 2,198-record PTB-XL test fold, 5 corruptions.
+Table 1 gives the leaderboard. mCE and relative mCE are normalized to MiniRocket, and lower
+is more robust. Everything is evaluated on the 2,198-record test fold over five corruptions.
 
-| Model | Clean AUROC | mCE ↓ | Relative mCE ↓ |
+**Table 1. Leaderboard.**
+
+| Model | Clean AUROC | mCE | Relative mCE |
 |---|---|---|---|
-| MiniRocket | **0.9011** | **1.000** | 1.000 |
-| Rocket | 0.8875 | 1.041 | **0.759** |
+| MiniRocket | 0.9011 | 1.000 | 1.000 |
+| Rocket | 0.8875 | 1.041 | 0.759 |
 | Hydra | 0.8912 | 1.198 | 1.231 |
-| catch22+ridge | 0.8406 | 1.567 | 2.424 |
+| catch22 + ridge | 0.8406 | 1.567 | 2.424 |
 
-The clean ranking (MiniRocket > Hydra > Rocket > catch22) and the mCE ranking
-(MiniRocket > Rocket > Hydra > catch22) differ only by a **Rocket↔Hydra swap** — and that
-swap is **not statistically significant** (Wilcoxon p_holm = 0.10; see below); the best and
-worst models are stable. By *relative* mCE — degradation above each model's own clean error
-— **Rocket is the most robust** (0.76, i.e. it degrades *less* than MiniRocket relative to
-its own baseline), a consequence of its gain-invariance and gentle decay (§5).
+The clean ranking (MiniRocket, Hydra, Rocket, catch22) and the mCE ranking (MiniRocket,
+Rocket, Hydra, catch22) differ only in that Rocket and Hydra trade places, and that swap is
+not statistically significant (Wilcoxon p_holm = 0.10, below). The best and worst models are
+unchanged. The relative-mCE column tells a slightly different story: Rocket has the smallest
+value (0.759), meaning it degrades less than MiniRocket relative to its own clean baseline,
+a consequence of its gain-invariance and gentle decay (Section 5).
 
-**RQ1 — clean accuracy vs robustness.** Spearman ρ between the clean and robustness
-(−mCE) rankings = **0.800** (p = 0.200; record-level bootstrap 95% CI **[0.800, 1.000]**).
-The pre-registered rule (ρ < 0.7 with CI excluding 0.9) is **not met**. With only four
-models the test is underpowered (ρ takes few discrete values, p is not significant, the CI
-is degenerate), so we treat RQ1 as **inconclusive**: no *strong* re-ordering appeared, but
-we can neither confirm a tight clean↔robust coupling nor rule out a weak effect.
+For RQ1, the Spearman correlation between the clean and robustness (−mCE) rankings is 0.800
+(p = 0.200; record-level bootstrap 95% CI [0.800, 1.000]). This does not meet the
+pre-registered rule of ρ < 0.7 with a CI excluding 0.9. With four models the test is
+underpowered — ρ can take only a few discrete values, the p-value is not significant, and
+the interval is degenerate — so we read RQ1 as inconclusive. No strong re-ordering appeared,
+but we can neither confirm a tight coupling between clean accuracy and robustness nor rule
+out a weak effect.
 
-**Significance across the 25 corruption×severity conditions.** Friedman χ² = 41.9,
-p ≈ 4.3 × 10⁻⁹ — the models are not interchangeable. Post-hoc Wilcoxon signed-rank with
-Holm–Bonferroni: all pairs differ significantly **except Rocket vs Hydra** (p_holm = 0.10).
-The two mid-rank models are statistically indistinguishable, so the swap that produces the
-clean-vs-robust ranking difference is within noise.
+The models are clearly not interchangeable. The Friedman test over the 25 conditions gives
+χ² = 41.9, p ≈ 4.3 × 10⁻⁹. Every pairwise Wilcoxon comparison is significant after Holm
+correction except Rocket versus Hydra (p_holm = 0.10), which is exactly the pair that
+produces the ranking difference. In other words, the two middle models are statistically
+indistinguishable, and the swap between them is within noise.
 
-**Figures** (in `results/`): `fig_fragility_heatmap.png` (per-corruption CE, Table 2 below),
-`fig_severity_curves.png` (AUROC vs severity per corruption), `fig_cd_diagram.png`
-(critical-difference diagram over ranks).
+The three figures (in `results/`) are the per-corruption CE heatmap (Table 2 below), the
+macro-AUROC-versus-severity curves per corruption, and the critical-difference diagram over
+ranks.
 
-**Table 2 — Per-corruption CE** (ref = MiniRocket; > 1 = more fragile than MiniRocket).
+**Table 2. Per-corruption CE** (reference = MiniRocket; values above 1 mean more fragile
+than MiniRocket).
 
 | Model | bw | ma | gaussian | gain | quant |
 |---|---|---|---|---|---|
 | MiniRocket | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 |
-| Rocket | 1.09 | 1.15 | 1.10 | **0.76** | 1.11 |
-| Hydra | 1.01 | 1.42 | **1.65** | 0.79 | 1.11 |
-| catch22+ridge | 1.71 | 1.69 | 1.27 | 1.25 | 1.91 |
+| Rocket | 1.09 | 1.15 | 1.10 | 0.76 | 1.11 |
+| Hydra | 1.01 | 1.42 | 1.65 | 0.79 | 1.11 |
+| catch22 + ridge | 1.71 | 1.69 | 1.27 | 1.25 | 1.91 |
 
 ## 5. Analysis and discussion
 
-**RQ1 — the ranking mostly holds, but the test is inconclusive.** Clean accuracy tracks the
-robustness ordering here (ρ = 0.80): the extremes are fixed and only the two middle models
-trade places — and that swap is not statistically significant (Wilcoxon p_holm = 0.10). This
-is the opposite of the ImageNet-C-style expectation we pre-registered, but with four models
-we cannot claim a *tight* coupling either; the honest reading is that no strong re-ordering
-was detected, not that clean accuracy is a proven proxy.
+The headline is that clean accuracy tracks the robustness ordering here reasonably well
+(ρ = 0.80): the two extremes are fixed and only the middle pair swaps, and that swap is not
+significant. This runs against the ImageNet-C-style expectation we pre-registered. It is not
+a positive result in the other direction either, because four models cannot establish a
+tight coupling; the fair reading is that we did not detect a strong re-ordering.
 
-**RQ2 — differential fragility is real.** The per-corruption CE (Table 2) exposes
-corruption-specific blind spots that clean accuracy does not reveal:
-- **Hydra** is the second-best clean model but is **disproportionately fragile to Gaussian
-  noise (CE 1.65×) and muscle artifact (1.42×)** — high-variance additive corruptions. This
-  is what erodes its aggregate robustness toward Rocket's level despite a stronger clean score.
-- **catch22+ridge** is uniformly the most fragile (CE 1.25–1.91 across all five), worst on
-  quantization (1.91×) and baseline wander (1.71×) — consistent with hand-crafted summary
-  features losing discriminative content as the waveform degrades.
-- **The ROCKET family is gain-invariant** (Rocket/Hydra CE 0.76–0.79 on gain): aeon's
-  `Rocket(normalise=True)` z-normalizes each series, so amplitude miscalibration is erased
-  before classification. This is an implementation-conferred robustness property (a config
-  default, not an intrinsic model property), and MiniRocket (no normalization) *is* affected;
-  the `gain` corruption is thus a near-no-op for normalizing models.
-- **Gaussian noise and muscle artifact are the most damaging corruptions** for the strong
-  models; quantization (down to 4 bits) is the mildest.
+The per-corruption view (Table 2) is more informative, and it shows blind spots that clean
+accuracy misses. Hydra is the second-best model on clean data but is unusually fragile to
+high-variance additive noise: its CE is 1.65 on Gaussian and 1.42 on muscle artifact, well
+above MiniRocket's. That weakness is what pulls its aggregate robustness down toward Rocket's
+level despite the stronger clean score. catch22 is the most fragile model across the board
+(CE from 1.25 to 1.91), and worst on quantization and baseline wander, which fits the idea
+that hand-crafted summary features lose discriminative power as the waveform degrades.
 
-**Absolute vs relative robustness.** By mCE (absolute), MiniRocket is most robust; by
-*relative* mCE (how far each model falls from its own clean baseline), **Rocket** is most
-robust (0.76) — it starts lower but decays gently and shrugs off gain. "Robust" is thus not
-a single ordering: a deployment optimizing worst-case absolute performance and one optimizing
-graceful degradation would pick different models.
+The ROCKET models are effectively immune to gain errors, with CE of 0.76 and 0.79. The
+reason is mundane: aeon's `Rocket` z-normalizes each series by default, so a change in
+amplitude is erased before classification. This is a real robustness property but it comes
+from a configuration default rather than anything intrinsic to the architecture, and
+MiniRocket, which does not normalize, is affected by gain. A side effect is that the gain
+corruption barely tests the normalizing models at all. Across the suite, Gaussian noise and
+muscle artifact do the most damage to the strong models, while quantization down to four
+bits is the mildest.
 
-**Takeaway for deployment.** Clean accuracy is a reasonable *first* filter but not a
-sufficient one: it correctly identifies the best and worst models here, yet hides Hydra's
-Gaussian/muscle-artifact brittleness — the kind of failure that matters on a noisy wearable.
-Robustness must be measured directly, which is what ECG-C provides.
+It is worth separating two senses of "robust." By absolute mCE, MiniRocket is the most
+robust model. By relative mCE, which measures how far each model falls from its own clean
+baseline, Rocket comes out ahead: it starts lower but decays gently and ignores gain. A
+deployment that cares about worst-case absolute performance and one that cares about graceful
+degradation would not pick the same model.
+
+For deployment the practical lesson is straightforward. Clean accuracy is a fine first filter
+and it correctly picks out the best and worst models here, but it says nothing about Hydra's
+weakness to Gaussian noise and muscle artifact, which is exactly the kind of failure that
+shows up on a noisy wearable. Robustness has to be measured directly, and that is what ECG-C
+is for.
 
 ## 6. Limitations and future work
 
-**Powerline at 100 Hz.** 50 Hz mains sits at the Nyquist frequency for 100 Hz signals, so a
-powerline tone cannot be represented without aliasing; we excluded it and defer it to the
-500 Hz PTB-XL records. **Small CPU zoo** of four models across two paradigms leaves the ρ
-test underpowered; the deep models (InceptionTime, SE-ResNet) and the Mantis foundation-feature
-probe are GPU-bound and deferred. **Single dataset** (PTB-XL) — cross-dataset external validity
-(Chapman/CPSC/CinC-2020) is future work. **Single training seed** per model — the ranking's
-seed-stability is unquantified (the bootstrap covers test-record sampling only). The remaining
-proposed corruptions (electrode motion, lead dropout, sampling-rate mismatch) and the mitigation
-studies (augmentation, test-time adaptation with a held-out corruption family) are out of scope.
+The most important limitation is the powerline corruption at 100 Hz. Since 50 Hz mains is at
+the Nyquist frequency for a 100 Hz signal, the tone cannot be represented without aliasing,
+so we excluded it and left it for the 500 Hz PTB-XL records. The four-model CPU zoo is the
+next constraint: it leaves the ρ test underpowered, and the deep models (InceptionTime,
+SE-ResNet) and the Mantis foundation-feature probe, which would round out the zoo, need a
+GPU. We also use a single training seed per model, so we have not quantified how stable the
+ranking is to training randomness; the bootstrap only covers sampling of test records.
+Finally, the study uses one dataset. Cross-dataset validity (Chapman, CPSC, CinC-2020), the
+remaining corruptions (electrode motion, lead dropout, sampling-rate mismatch), and the
+mitigation experiments (augmentation, test-time adaptation with a held-out corruption family)
+are all left for later.
 
 ## 7. Conclusion
 
-On a focused four-model CPU zoo of PTB-XL classifiers under five physically-grounded
-corruptions, we pre-registered and tested whether clean diagnostic accuracy is a weak proxy
-for corruption robustness. The test is **inconclusive**: the clean-vs-mCE Spearman ρ = 0.80
-does not meet our ρ < 0.7 rule, but with four models it can neither confirm nor confidently
-refute a coupling — and the one mid-rank swap (Rocket↔Hydra) is not significant. What is
-clear is more nuanced than a single correlation: robustness is metric-dependent (Rocket wins
-on *relative* degradation), and clean accuracy hides real, corruption-specific blind spots —
-most notably Hydra's fragility to Gaussian noise and muscle artifact. The practical lesson
-stands regardless: for deployment on noisy hardware, clean leaderboards are a useful first
-cut but no substitute for direct robustness measurement. The main limitations are the
-four-model zoo and single seed, which leave the ρ estimate underpowered; enlarging the zoo
-(deep + foundation models) and adding cross-dataset evaluation are the natural next steps.
+We pre-registered and tested whether clean diagnostic accuracy is a weak proxy for corruption
+robustness, using four PTB-XL classifiers and five physically grounded corruptions. The test
+came out inconclusive: the Spearman correlation of 0.80 does not meet the ρ < 0.7 rule, and
+with four models it can neither confirm nor rule out a coupling, while the one middle-of-table
+swap is not significant. The more useful findings sit underneath that single number.
+Robustness depends on how you define it, since Rocket wins on relative degradation, and clean
+accuracy hides real corruption-specific weaknesses, the clearest being Hydra's fragility to
+Gaussian noise and muscle artifact. The practical point survives regardless of how the
+hypothesis lands: for deployment on noisy hardware, a clean leaderboard is a starting point,
+not a substitute for measuring robustness directly. The main things holding back a firmer
+answer are the small zoo and the single seed, and enlarging the zoo with deep and foundation
+models, together with cross-dataset evaluation, is the obvious next step.
 
-## 8. References
+## References
 
-1. Hendrycks, D., & Dietterich, T. (2019). *Benchmarking Neural Network Robustness to Common Corruptions and Perturbations* (ImageNet-C). ICLR. arXiv:1903.12261.
-2. Mintun, E., Kirillov, A., & Xie, S. (2021). *On Interaction Between Augmentations and Corruptions in Natural Corruption Robustness* (ImageNet-C-bar). NeurIPS. arXiv:2102.11273.
-3. Dempster, A., Petitjean, F., & Webb, G. I. (2020). *ROCKET: Exceptionally fast and accurate time series classification using random convolutional kernels.* Data Mining and Knowledge Discovery. arXiv:1910.13051.
-4. Dempster, A., Schmidt, D. F., & Webb, G. I. (2021). *MiniRocket: A very fast (almost) deterministic transform for time series classification.* KDD. arXiv:2012.08791.
-5. Dempster, A., Schmidt, D. F., & Webb, G. I. (2023). *Hydra: Competing convolutional kernels for fast and accurate time series classification.* Data Mining and Knowledge Discovery. arXiv:2203.13652.
-6. Lubba, C. H., et al. (2019). *catch22: CAnonical Time-series CHaracteristics.* Data Mining and Knowledge Discovery. arXiv:1901.10200.
-7. Wagner, P., et al. (2020). *PTB-XL, a large publicly available electrocardiography dataset.* Scientific Data 7, 154.
-8. Moody, G. B., Muldrow, W. E., & Mark, R. G. (1984). *A noise stress test for arrhythmia detectors* (MIT-BIH Noise Stress Test Database). Computers in Cardiology.
-9. Goldberger, A. L., et al. (2000). *PhysioBank, PhysioToolkit, and PhysioNet.* Circulation 101(23), e215–e220.
-10. Middlehurst, M., et al. (2024). *aeon: a Python toolkit for learning from time series.* JMLR (software).
-11. Demšar, J. (2006). *Statistical Comparisons of Classifiers over Multiple Data Sets.* JMLR 7, 1–30.
-12. García, S., & Herrera, F. (2008). *An Extension on "Statistical Comparisons of Classifiers over Multiple Data Sets" for all Pairwise Comparisons.* JMLR 9, 2677–2694.
+1. Hendrycks, D., & Dietterich, T. (2019). Benchmarking Neural Network Robustness to Common Corruptions and Perturbations (ImageNet-C). ICLR. arXiv:1903.12261.
+2. Mintun, E., Kirillov, A., & Xie, S. (2021). On Interaction Between Augmentations and Corruptions in Natural Corruption Robustness (ImageNet-C-bar). NeurIPS. arXiv:2102.11273.
+3. Dempster, A., Petitjean, F., & Webb, G. I. (2020). ROCKET: Exceptionally fast and accurate time series classification using random convolutional kernels. Data Mining and Knowledge Discovery. arXiv:1910.13051.
+4. Dempster, A., Schmidt, D. F., & Webb, G. I. (2021). MiniRocket: A very fast (almost) deterministic transform for time series classification. KDD. arXiv:2012.08791.
+5. Dempster, A., Schmidt, D. F., & Webb, G. I. (2023). Hydra: Competing convolutional kernels for fast and accurate time series classification. Data Mining and Knowledge Discovery. arXiv:2203.13652.
+6. Lubba, C. H., et al. (2019). catch22: CAnonical Time-series CHaracteristics. Data Mining and Knowledge Discovery. arXiv:1901.10200.
+7. Wagner, P., et al. (2020). PTB-XL, a large publicly available electrocardiography dataset. Scientific Data 7, 154.
+8. Moody, G. B., Muldrow, W. E., & Mark, R. G. (1984). A noise stress test for arrhythmia detectors (MIT-BIH Noise Stress Test Database). Computers in Cardiology.
+9. Goldberger, A. L., et al. (2000). PhysioBank, PhysioToolkit, and PhysioNet. Circulation 101(23), e215–e220.
+10. Middlehurst, M., et al. (2024). aeon: a Python toolkit for learning from time series. JMLR (software).
+11. Demšar, J. (2006). Statistical Comparisons of Classifiers over Multiple Data Sets. JMLR 7, 1–30.
+12. García, S., & Herrera, F. (2008). An Extension on "Statistical Comparisons of Classifiers over Multiple Data Sets" for all Pairwise Comparisons. JMLR 9, 2677–2694.
 
-*Full proposal reference list (28 entries) in [ECG-C-proposal.md](ECG-C-proposal.md) §13.
-arXiv IDs / DOIs to be verified against live sources before any external submission; entries
-[20], [21], [25] there are `Authors (2025)` placeholders whose author lists remain unresolved.*
+*The full 28-entry reference list is in [ECG-C-proposal.md](ECG-C-proposal.md) §13. arXiv IDs
+and DOIs should be checked against live sources before any external submission; entries [20],
+[21], and [25] there are still placeholders with unresolved author lists.*
